@@ -1,0 +1,183 @@
+name: Test Google Fonts Availability
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9 AM UTC
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test-fonts:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Test Red Hat Display
+        id: test-display
+        run: |
+          echo "::group::Testing Red Hat Display"
+          
+          # Test CSS endpoint
+          CSS_URL="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;700&display=swap"
+          echo "Fetching CSS from: $CSS_URL"
+          curl -f -s "$CSS_URL" > display.css || { echo "❌ CSS endpoint failed"; exit 1; }
+          
+          # Extract and test first font URL
+          FONT_URL=$(grep -oP 'url\(\K[^)]+' display.css | head -1)
+          echo "Testing font URL: $FONT_URL"
+          
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FONT_URL")
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "❌ Font file returned HTTP $STATUS_CODE"
+            exit 1
+          fi
+          
+          # Check format
+          if echo "$FONT_URL" | grep -q "woff2"; then
+            echo "✅ woff2 format available"
+            echo "format=woff2" >> $GITHUB_OUTPUT
+          elif echo "$FONT_URL" | grep -q "ttf"; then
+            echo "⚠️ Warning: Serving TTF instead of woff2"
+            echo "format=ttf" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Warning: Unknown format"
+            echo "format=unknown" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "::endgroup::"
+      
+      - name: Test Red Hat Text
+        id: test-text
+        run: |
+          echo "::group::Testing Red Hat Text"
+          
+          CSS_URL="https://fonts.googleapis.com/css2?family=Red+Hat+Text:wght@400;700&display=swap"
+          echo "Fetching CSS from: $CSS_URL"
+          curl -f -s "$CSS_URL" > text.css || { echo "❌ CSS endpoint failed"; exit 1; }
+          
+          FONT_URL=$(grep -oP 'url\(\K[^)]+' text.css | head -1)
+          echo "Testing font URL: $FONT_URL"
+          
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FONT_URL")
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "❌ Font file returned HTTP $STATUS_CODE"
+            exit 1
+          fi
+          
+          echo "✅ Red Hat Text loading successfully"
+          echo "::endgroup::"
+      
+      - name: Test Red Hat Mono
+        id: test-mono
+        run: |
+          echo "::group::Testing Red Hat Mono"
+          
+          CSS_URL="https://fonts.googleapis.com/css2?family=Red+Hat+Mono:wght@400;700&display=swap"
+          echo "Fetching CSS from: $CSS_URL"
+          curl -f -s "$CSS_URL" > mono.css || { echo "❌ CSS endpoint failed"; exit 1; }
+          
+          FONT_URL=$(grep -oP 'url\(\K[^)]+' mono.css | head -1)
+          echo "Testing font URL: $FONT_URL"
+          
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FONT_URL")
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "❌ Font file returned HTTP $STATUS_CODE"
+            exit 1
+          fi
+          
+          echo "✅ Red Hat Mono loading successfully"
+          echo "::endgroup::"
+      
+      - name: Test woff2 availability
+        id: test-woff2
+        continue-on-error: true
+        run: |
+          echo "::group::Testing woff2 format availability"
+          
+          # Test a known woff2 URL pattern
+          WOFF2_URL="https://fonts.gstatic.com/s/redhatdisplay/v21/8vIq7wUr0m80wwYf0QCXZzYzUoTK8RZQvRd-D1NYbmyWEEMbCa8AIHrEG1nO6OOJzScMKMPL.woff2"
+          echo "Testing woff2 URL: $WOFF2_URL"
+          
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WOFF2_URL")
+          if [ "$STATUS_CODE" = "200" ]; then
+            echo "✅ woff2 files are now accessible!"
+            echo "woff2_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ woff2 files still return HTTP $STATUS_CODE"
+            echo "woff2_available=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "::endgroup::"
+      
+      - name: Summary
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All Red Hat font families are loading from Google Fonts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.test-display.outputs.format }}" = "woff2" ]; then
+            echo "🎉 **Issue Resolved:** Google Fonts is now serving woff2 format!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Action Required:** Update GOOGLE_FONTS_STATUS.md to reflect resolution" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.test-display.outputs.format }}" = "ttf" ]; then
+            echo "⚠️ **Known Issue:** Google Fonts is serving TTF instead of woff2" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- Fonts load correctly but with larger file sizes" >> $GITHUB_STEP_SUMMARY
+            echo "- See [GOOGLE_FONTS_STATUS.md](../blob/master/GOOGLE_FONTS_STATUS.md) for details" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Last checked: $(date -u +"%Y-%m-%d %H:%M UTC")" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🚨 Google Fonts availability check failed';
+            const body = `Automated testing detected an issue with Google Fonts distribution.
+            
+            **Test Date:** ${new Date().toISOString()}
+            **Workflow Run:** ${context.payload.repository.html_url}/actions/runs/${context.runId}
+            
+            ## What Happened
+            
+            The weekly automated check of Google Fonts URLs failed. This could indicate:
+            - Font files are returning HTTP errors (not 200)
+            - CSS endpoints are unavailable
+            - Network connectivity issues
+            
+            ## Next Steps
+            
+            1. Check the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for specific error details
+            2. Manually verify Google Fonts URLs
+            3. Check Google Fonts status page if available
+            4. Update GOOGLE_FONTS_STATUS.md if needed
+            
+            ## Related
+            
+            - [Google Fonts Status](../blob/master/GOOGLE_FONTS_STATUS.md)
+            - [Testing Checklist](../blob/master/.github/GOOGLE_FONTS_CHECKLIST.md)
+            `;
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'automated-alert,google-fonts'
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['google-fonts', 'automated-alert', 'monitoring']
+              });
+            } else {
+              console.log('Alert issue already exists, skipping creation');
+            }
